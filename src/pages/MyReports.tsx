@@ -12,7 +12,8 @@ import {
   Clock,
   MessageSquare,
   ChevronDown,
-  Eye
+  Eye,
+  Trash2
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,8 +27,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { useAuth } from '@/contexts/AuthContext';
-import { getIssuesByReporter, Issue } from '@/lib/data';
+import { getIssuesByReporter, deleteIssue, Issue } from '@/lib/data';
+import { toast } from 'sonner';
 
 const typeIcons = {
   infrastructure: Building,
@@ -65,8 +77,23 @@ export const MyReports: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
+  const [issueToDelete, setIssueToDelete] = useState<Issue | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const issues = user ? getIssuesByReporter(user.id) : [];
+
+  const handleDeleteIssue = () => {
+    if (issueToDelete) {
+      const success = deleteIssue(issueToDelete.id);
+      if (success) {
+        toast.success('Report deleted successfully');
+        setRefreshKey(prev => prev + 1);
+      } else {
+        toast.error('Failed to delete report');
+      }
+      setIssueToDelete(null);
+    }
+  };
 
   const filteredIssues = useMemo(() => {
     return issues
@@ -82,7 +109,8 @@ export const MyReports: React.FC = () => {
         return matchesSearch && matchesStatus && matchesType;
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  }, [issues, searchQuery, statusFilter, typeFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [issues, searchQuery, statusFilter, typeFilter, refreshKey]);
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -217,9 +245,22 @@ export const MyReports: React.FC = () => {
                         <Badge variant="outline" className="capitalize">{issue.priority}</Badge>
                       </div>
                     </div>
-                    <Button variant="ghost" size="icon" className="shrink-0">
-                      <Eye className="h-5 w-5" />
-                    </Button>
+                    <div className="flex shrink-0 gap-1">
+                      <Button variant="ghost" size="icon">
+                        <Eye className="h-5 w-5" />
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIssueToDelete(issue);
+                        }}
+                      >
+                        <Trash2 className="h-5 w-5" />
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -304,6 +345,27 @@ export const MyReports: React.FC = () => {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!issueToDelete} onOpenChange={() => setIssueToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Report</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{issueToDelete?.title}"? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleDeleteIssue}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
