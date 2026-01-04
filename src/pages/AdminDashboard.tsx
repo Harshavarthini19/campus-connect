@@ -1,9 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, 
   Search, 
-  Filter, 
   Building, 
   Wrench, 
   AlertTriangle, 
@@ -28,58 +27,103 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { getIssues, updateIssue, addComment, getStatistics, Issue, createNotification, getUsers } from '@/lib/data';
+import { supabase } from '@/integrations/supabase/client';
+import type { Tables } from '@/integrations/supabase/types';
 
-const typeIcons = {
-  infrastructure: Building,
-  harassment: AlertTriangle,
-  technical: Wrench,
-  suggestion: Lightbulb,
+type Issue = Tables<'issues'>;
+
+const typeIcons: Record<string, React.ElementType> = {
+  maintenance: Wrench,
+  safety: AlertTriangle,
+  cleanliness: Building,
+  noise: Lightbulb,
+  accessibility: Building,
+  other: Lightbulb,
 };
 
-const typeColors = {
-  infrastructure: 'bg-blue-500/10 text-blue-600',
-  harassment: 'bg-red-500/10 text-red-600',
-  technical: 'bg-purple-500/10 text-purple-600',
-  suggestion: 'bg-amber-500/10 text-amber-600',
+const typeColors: Record<string, string> = {
+  maintenance: 'bg-purple-500/10 text-purple-600',
+  safety: 'bg-red-500/10 text-red-600',
+  cleanliness: 'bg-blue-500/10 text-blue-600',
+  noise: 'bg-amber-500/10 text-amber-600',
+  accessibility: 'bg-green-500/10 text-green-600',
+  other: 'bg-gray-500/10 text-gray-600',
 };
 
-const statusColors = {
-  'new': 'bg-info text-info-foreground',
-  'in-progress': 'bg-warning text-warning-foreground',
-  'under-review': 'bg-primary text-primary-foreground',
+const statusColors: Record<string, string> = {
+  'pending': 'bg-info text-info-foreground',
+  'in_progress': 'bg-warning text-warning-foreground',
   'resolved': 'bg-success text-success-foreground',
   'closed': 'bg-muted text-muted-foreground',
 };
 
-const priorityColors = {
+const priorityColors: Record<string, string> = {
   low: 'border-l-muted-foreground/30',
   medium: 'border-l-info',
   high: 'border-l-warning',
-  urgent: 'border-l-destructive',
+  critical: 'border-l-destructive',
 };
+
+interface Stats {
+  total: number;
+  pending: number;
+  inProgress: number;
+  resolved: number;
+  userCount: number;
+}
 
 export const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, profile, isAdmin } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [newComment, setNewComment] = useState('');
-  const [isInternalComment, setIsInternalComment] = useState(false);
+  const [issues, setIssues] = useState<Issue[]>([]);
+  const [stats, setStats] = useState<Stats>({ total: 0, pending: 0, inProgress: 0, resolved: 0, userCount: 0 });
+  const [loading, setLoading] = useState(true);
 
-  const issues = getIssues();
-  const stats = getStatistics();
-  const users = getUsers();
+  useEffect(() => {
+    const fetchData = async () => {
+      // Fetch issues
+      const { data: issuesData } = await supabase
+        .from('issues')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (issuesData) {
+        setIssues(issuesData);
+        setStats({
+          total: issuesData.length,
+          pending: issuesData.filter(i => i.status === 'pending').length,
+          inProgress: issuesData.filter(i => i.status === 'in_progress').length,
+          resolved: issuesData.filter(i => i.status === 'resolved').length,
+          userCount: 0, // We'll get this from profiles
+        });
+      }
+
+      // Fetch user count
+      const { count } = await supabase
+        .from('profiles')
+        .select('*', { count: 'exact', head: true });
+      
+      if (count !== null) {
+        setStats(prev => ({ ...prev, userCount: count }));
+      }
+
+      setLoading(false);
+    };
+
+    fetchData();
+  }, []);
 
   const filteredIssues = useMemo(() => {
     return issues
@@ -87,8 +131,7 @@ export const AdminDashboard: React.FC = () => {
         const matchesSearch = 
           issue.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
           issue.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          issue.location.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          issue.reporterName.toLowerCase().includes(searchQuery.toLowerCase());
+          issue.location.toLowerCase().includes(searchQuery.toLowerCase());
         
         const matchesStatus = statusFilter === 'all' || issue.status === statusFilter;
         const matchesType = typeFilter === 'all' || issue.type === typeFilter;
@@ -97,10 +140,10 @@ export const AdminDashboard: React.FC = () => {
         return matchesSearch && matchesStatus && matchesType && matchesPriority;
       })
       .sort((a, b) => {
-        const priorityOrder = { urgent: 0, high: 1, medium: 2, low: 3 };
+        const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
         const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
         if (priorityDiff !== 0) return priorityDiff;
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       });
   }, [issues, searchQuery, statusFilter, typeFilter, priorityFilter]);
 
@@ -114,64 +157,68 @@ export const AdminDashboard: React.FC = () => {
     });
   };
 
-  const handleStatusChange = (issueId: string, newStatus: Issue['status']) => {
-    const issue = issues.find(i => i.id === issueId);
-    if (!issue) return;
+  const handleStatusChange = async (issueId: string, newStatus: string) => {
+    const { error } = await supabase
+      .from('issues')
+      .update({ status: newStatus as any })
+      .eq('id', issueId);
 
-    updateIssue(issueId, { status: newStatus });
+    if (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to update status',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIssues(issues.map(i => i.id === issueId ? { ...i, status: newStatus as any } : i));
     
-    createNotification({
-      userId: issue.reporterId,
-      title: 'Issue Status Updated',
-      message: `Your issue "${issue.title}" status has been changed to ${newStatus.replace('-', ' ')}.`,
-      type: newStatus === 'resolved' ? 'success' : 'info',
-      link: '/my-reports',
-    });
-
     toast({
       title: 'Status Updated',
-      description: `Issue status changed to ${newStatus.replace('-', ' ')}.`,
+      description: `Issue status changed to ${newStatus.replace('_', ' ')}.`,
     });
 
     if (selectedIssue?.id === issueId) {
-      setSelectedIssue({ ...selectedIssue, status: newStatus });
+      setSelectedIssue({ ...selectedIssue, status: newStatus as any });
     }
   };
 
-  const handleAddComment = () => {
+  const handleAddComment = async () => {
     if (!selectedIssue || !user || !newComment.trim()) return;
 
-    const comment = addComment(selectedIssue.id, {
-      issueId: selectedIssue.id,
-      userId: user.id,
-      userName: user.name,
+    const { error } = await supabase.from('comments').insert({
+      issue_id: selectedIssue.id,
+      user_id: user.id,
       content: newComment,
-      isInternal: isInternalComment,
     });
 
-    if (comment && !isInternalComment) {
-      createNotification({
-        userId: selectedIssue.reporterId,
-        title: 'New Comment on Your Issue',
-        message: `An administrator commented on "${selectedIssue.title}".`,
-        type: 'info',
-        link: '/my-reports',
+    if (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to add comment',
+        variant: 'destructive',
       });
+      return;
     }
 
     toast({
       title: 'Comment Added',
-      description: isInternalComment ? 'Internal note added.' : 'Comment sent to reporter.',
+      description: 'Your comment has been added.',
     });
 
     setNewComment('');
-    setSelectedIssue({ 
-      ...selectedIssue, 
-      comments: [...selectedIssue.comments, comment!] 
-    });
   };
 
-  if (user?.role !== 'admin') {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <div className="text-muted-foreground">Loading dashboard...</div>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
         <Card className="max-w-md text-center">
@@ -224,8 +271,8 @@ export const AdminDashboard: React.FC = () => {
                 <Clock className="h-5 w-5 text-info" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-foreground">{stats.new}</p>
-                <p className="text-sm text-muted-foreground">New</p>
+                <p className="text-2xl font-bold text-foreground">{stats.pending}</p>
+                <p className="text-sm text-muted-foreground">Pending</p>
               </div>
             </div>
           </CardContent>
@@ -263,7 +310,7 @@ export const AdminDashboard: React.FC = () => {
                 <Users className="h-5 w-5 text-muted-foreground" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-foreground">{users.length}</p>
+                <p className="text-2xl font-bold text-foreground">{stats.userCount}</p>
                 <p className="text-sm text-muted-foreground">Users</p>
               </div>
             </div>
@@ -291,9 +338,8 @@ export const AdminDashboard: React.FC = () => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="new">New</SelectItem>
-                  <SelectItem value="in-progress">In Progress</SelectItem>
-                  <SelectItem value="under-review">Under Review</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="in_progress">In Progress</SelectItem>
                   <SelectItem value="resolved">Resolved</SelectItem>
                   <SelectItem value="closed">Closed</SelectItem>
                 </SelectContent>
@@ -304,10 +350,12 @@ export const AdminDashboard: React.FC = () => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Types</SelectItem>
-                  <SelectItem value="infrastructure">Infrastructure</SelectItem>
-                  <SelectItem value="technical">Technical</SelectItem>
-                  <SelectItem value="harassment">Harassment</SelectItem>
-                  <SelectItem value="suggestion">Suggestion</SelectItem>
+                  <SelectItem value="maintenance">Maintenance</SelectItem>
+                  <SelectItem value="safety">Safety</SelectItem>
+                  <SelectItem value="cleanliness">Cleanliness</SelectItem>
+                  <SelectItem value="noise">Noise</SelectItem>
+                  <SelectItem value="accessibility">Accessibility</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
                 </SelectContent>
               </Select>
               <Select value={priorityFilter} onValueChange={setPriorityFilter}>
@@ -316,7 +364,7 @@ export const AdminDashboard: React.FC = () => {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Priority</SelectItem>
-                  <SelectItem value="urgent">Urgent</SelectItem>
+                  <SelectItem value="critical">Critical</SelectItem>
                   <SelectItem value="high">High</SelectItem>
                   <SelectItem value="medium">Medium</SelectItem>
                   <SelectItem value="low">Low</SelectItem>
@@ -345,16 +393,16 @@ export const AdminDashboard: React.FC = () => {
       ) : (
         <div className="space-y-4">
           {filteredIssues.map((issue) => {
-            const TypeIcon = typeIcons[issue.type];
+            const TypeIcon = typeIcons[issue.type] || Lightbulb;
             return (
               <Card 
                 key={issue.id}
-                className={`cursor-pointer border-l-4 transition-all hover:shadow-card-hover ${priorityColors[issue.priority]}`}
+                className={`cursor-pointer border-l-4 transition-all hover:shadow-card-hover ${priorityColors[issue.priority] || ''}`}
                 onClick={() => setSelectedIssue(issue)}
               >
                 <CardContent className="p-4">
                   <div className="flex items-start gap-4">
-                    <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-lg ${typeColors[issue.type]}`}>
+                    <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-lg ${typeColors[issue.type] || ''}`}>
                       <TypeIcon className="h-6 w-6" />
                     </div>
                     <div className="min-w-0 flex-1">
@@ -365,30 +413,20 @@ export const AdminDashboard: React.FC = () => {
                         </div>
                         <div className="flex shrink-0 gap-2">
                           <Badge variant="outline" className="capitalize">{issue.priority}</Badge>
-                          <Badge className={statusColors[issue.status]}>
-                            {issue.status.replace('-', ' ')}
+                          <Badge className={statusColors[issue.status] || ''}>
+                            {issue.status.replace('_', ' ')}
                           </Badge>
                         </div>
                       </div>
                       <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
                         <div className="flex items-center gap-1">
-                          <Users className="h-4 w-4" />
-                          {issue.reporterName}
-                        </div>
-                        <div className="flex items-center gap-1">
                           <MapPin className="h-4 w-4" />
-                          {issue.location.name}
+                          {issue.location}
                         </div>
                         <div className="flex items-center gap-1">
                           <Clock className="h-4 w-4" />
-                          {formatDate(issue.createdAt)}
+                          {formatDate(issue.created_at)}
                         </div>
-                        {issue.comments.length > 0 && (
-                          <div className="flex items-center gap-1">
-                            <MessageSquare className="h-4 w-4" />
-                            {issue.comments.length}
-                          </div>
-                        )}
                       </div>
                     </div>
                   </div>
@@ -407,9 +445,9 @@ export const AdminDashboard: React.FC = () => {
               <DialogHeader>
                 <div className="flex items-start gap-3">
                   {(() => {
-                    const TypeIcon = typeIcons[selectedIssue.type];
+                    const TypeIcon = typeIcons[selectedIssue.type] || Lightbulb;
                     return (
-                      <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${typeColors[selectedIssue.type]}`}>
+                      <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${typeColors[selectedIssue.type] || ''}`}>
                         <TypeIcon className="h-5 w-5" />
                       </div>
                     );
@@ -417,7 +455,7 @@ export const AdminDashboard: React.FC = () => {
                   <div className="min-w-0">
                     <DialogTitle className="line-clamp-2">{selectedIssue.title}</DialogTitle>
                     <DialogDescription>
-                      Reported by {selectedIssue.reporterName} on {formatDate(selectedIssue.createdAt)}
+                      Created on {formatDate(selectedIssue.created_at)}
                     </DialogDescription>
                   </div>
                 </div>
@@ -426,38 +464,32 @@ export const AdminDashboard: React.FC = () => {
               <Tabs defaultValue="details" className="mt-4">
                 <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="details">Details</TabsTrigger>
-                  <TabsTrigger value="comments">
-                    Comments ({selectedIssue.comments.length})
-                  </TabsTrigger>
+                  <TabsTrigger value="comments">Comments</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="details" className="space-y-4">
                   <div className="flex flex-wrap gap-2">
                     <Select
                       value={selectedIssue.status}
-                      onValueChange={(value) => handleStatusChange(selectedIssue.id, value as Issue['status'])}
+                      onValueChange={(value) => handleStatusChange(selectedIssue.id, value)}
                     >
                       <SelectTrigger className="w-40">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="new">New</SelectItem>
-                        <SelectItem value="in-progress">In Progress</SelectItem>
-                        <SelectItem value="under-review">Under Review</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="in_progress">In Progress</SelectItem>
                         <SelectItem value="resolved">Resolved</SelectItem>
                         <SelectItem value="closed">Closed</SelectItem>
                       </SelectContent>
                     </Select>
                     <Badge variant="outline" className="capitalize">{selectedIssue.priority} priority</Badge>
                     <Badge variant="outline" className="capitalize">{selectedIssue.type}</Badge>
-                    {selectedIssue.isAnonymous && (
-                      <Badge variant="secondary">Anonymous</Badge>
-                    )}
                   </div>
 
                   <div className="rounded-lg bg-muted/50 p-4">
                     <h4 className="mb-2 font-medium text-foreground">Description</h4>
-                    <p className="whitespace-pre-wrap text-muted-foreground">{selectedIssue.description}</p>
+                    <p className="text-muted-foreground">{selectedIssue.description}</p>
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -466,66 +498,30 @@ export const AdminDashboard: React.FC = () => {
                         <MapPin className="h-4 w-4" />
                         <span className="text-sm">Location</span>
                       </div>
-                      <p className="mt-1 font-medium text-foreground">{selectedIssue.location.name}</p>
+                      <p className="mt-1 font-medium text-foreground">{selectedIssue.location}</p>
                     </div>
                     <div className="rounded-lg border border-border p-4">
                       <div className="flex items-center gap-2 text-muted-foreground">
                         <Clock className="h-4 w-4" />
                         <span className="text-sm">Last Updated</span>
                       </div>
-                      <p className="mt-1 font-medium text-foreground">{formatDate(selectedIssue.updatedAt)}</p>
+                      <p className="mt-1 font-medium text-foreground">{formatDate(selectedIssue.updated_at)}</p>
                     </div>
                   </div>
                 </TabsContent>
 
                 <TabsContent value="comments" className="space-y-4">
-                  {selectedIssue.comments.length === 0 ? (
-                    <div className="py-8 text-center text-muted-foreground">
-                      No comments yet
-                    </div>
-                  ) : (
-                    <div className="space-y-3 max-h-60 overflow-y-auto">
-                      {selectedIssue.comments.map((comment) => (
-                        <div 
-                          key={comment.id} 
-                          className={`rounded-lg border p-4 ${comment.isInternal ? 'border-warning/50 bg-warning/5' : 'border-border'}`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-foreground">{comment.userName}</span>
-                              {comment.isInternal && (
-                                <Badge variant="outline" className="text-xs">Internal</Badge>
-                              )}
-                            </div>
-                            <span className="text-xs text-muted-foreground">{formatDate(comment.createdAt)}</span>
-                          </div>
-                          <p className="mt-2 text-muted-foreground">{comment.content}</p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="space-y-3 border-t border-border pt-4">
+                  <div className="space-y-4">
                     <Textarea
-                      placeholder="Write a comment..."
+                      placeholder="Add a comment..."
                       value={newComment}
                       onChange={(e) => setNewComment(e.target.value)}
                       rows={3}
                     />
-                    <div className="flex items-center justify-between">
-                      <label className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={isInternalComment}
-                          onChange={(e) => setIsInternalComment(e.target.checked)}
-                          className="rounded border-border"
-                        />
-                        Internal note (not visible to reporter)
-                      </label>
-                      <Button onClick={handleAddComment} disabled={!newComment.trim()}>
-                        Add Comment
-                      </Button>
-                    </div>
+                    <Button onClick={handleAddComment} disabled={!newComment.trim()}>
+                      <MessageSquare className="mr-2 h-4 w-4" />
+                      Add Comment
+                    </Button>
                   </div>
                 </TabsContent>
               </Tabs>

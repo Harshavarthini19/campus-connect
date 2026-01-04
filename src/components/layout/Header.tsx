@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Bell, Settings, LogOut, User, Menu, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -11,17 +11,39 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/contexts/AuthContext';
-import { getNotifications } from '@/lib/data';
+import { supabase } from '@/integrations/supabase/client';
+import type { Tables } from '@/integrations/supabase/types';
+
+type Notification = Tables<'notifications'>;
 
 export const Header: React.FC = () => {
-  const { user, logout } = useAuth();
+  const { user, profile, isAdmin, logout } = useAuth();
   const navigate = useNavigate();
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   
-  const notifications = user ? getNotifications(user.id) : [];
-  const unreadCount = notifications.filter(n => !n.isRead).length;
+  useEffect(() => {
+    if (!user) return;
+    
+    const fetchNotifications = async () => {
+      const { data } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(10);
+      
+      if (data) {
+        setNotifications(data);
+      }
+    };
+    
+    fetchNotifications();
+  }, [user]);
+  
+  const unreadCount = notifications.filter(n => !n.read).length;
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/');
   };
 
@@ -56,7 +78,7 @@ export const Header: React.FC = () => {
           >
             My Reports
           </Link>
-          {user?.role === 'admin' && (
+          {isAdmin && (
             <Link 
               to="/admin" 
               className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
@@ -97,7 +119,7 @@ export const Header: React.FC = () => {
                 notifications.slice(0, 5).map((notif) => (
                   <DropdownMenuItem 
                     key={notif.id} 
-                    className={`flex flex-col items-start gap-1 px-4 py-3 ${!notif.isRead ? 'bg-primary/5' : ''}`}
+                    className={`flex flex-col items-start gap-1 px-4 py-3 ${!notif.read ? 'bg-primary/5' : ''}`}
                   >
                     <span className="font-medium">{notif.title}</span>
                     <span className="text-xs text-muted-foreground">{notif.message}</span>
@@ -116,7 +138,7 @@ export const Header: React.FC = () => {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
               <div className="px-4 py-2">
-                <p className="font-medium">{user?.name}</p>
+                <p className="font-medium">{profile?.name || user?.email}</p>
                 <p className="text-xs text-muted-foreground">{user?.email}</p>
               </div>
               <DropdownMenuSeparator />
@@ -133,7 +155,7 @@ export const Header: React.FC = () => {
               <DropdownMenuItem onClick={() => navigate('/my-reports')} className="md:hidden">
                 My Reports
               </DropdownMenuItem>
-              {user?.role === 'admin' && (
+              {isAdmin && (
                 <DropdownMenuItem onClick={() => navigate('/admin')} className="md:hidden">
                   <Shield className="mr-2 h-4 w-4" />
                   Admin Dashboard

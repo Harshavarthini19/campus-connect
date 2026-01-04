@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, User, Mail, Building, Phone, Save, Lock } from 'lucide-react';
+import { ArrowLeft, User, Mail, Building, Save, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { updateUser } from '@/lib/data';
+import { supabase } from '@/integrations/supabase/client';
 
 const departments = [
   'Computer Science',
@@ -27,18 +27,17 @@ const departments = [
 export const Profile: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { user, updateProfile } = useAuth();
+  const { user, profile, isAdmin, updateProfile } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
+  const [isPasswordLoading, setIsPasswordLoading] = useState(false);
 
   const [formData, setFormData] = useState({
-    name: user?.name || '',
-    email: user?.email || '',
-    department: user?.department || '',
-    phone: user?.phone || '',
+    name: profile?.name || '',
+    email: profile?.email || user?.email || '',
+    department: profile?.department || '',
   });
 
   const [passwordData, setPasswordData] = useState({
-    currentPassword: '',
     newPassword: '',
     confirmPassword: '',
   });
@@ -48,14 +47,15 @@ export const Profile: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const updated = updateUser(user.id, formData);
-      if (updated) {
-        updateProfile(formData);
-        toast({
-          title: 'Profile Updated',
-          description: 'Your profile has been updated successfully.',
-        });
-      }
+      await updateProfile({
+        name: formData.name,
+        department: formData.department,
+      });
+      
+      toast({
+        title: 'Profile Updated',
+        description: 'Your profile has been updated successfully.',
+      });
     } catch (error) {
       toast({
         title: 'Update Failed',
@@ -79,29 +79,39 @@ export const Profile: React.FC = () => {
       return;
     }
 
-    if (passwordData.currentPassword !== user.password) {
+    if (passwordData.newPassword.length < 6) {
       toast({
-        title: 'Incorrect Password',
-        description: 'Your current password is incorrect.',
+        title: 'Password Too Short',
+        description: 'Password must be at least 6 characters.',
         variant: 'destructive',
       });
       return;
     }
 
+    setIsPasswordLoading(true);
+
     try {
-      updateUser(user.id, { password: passwordData.newPassword });
-      updateProfile({ password: passwordData.newPassword });
-      setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      const { error } = await supabase.auth.updateUser({
+        password: passwordData.newPassword,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      setPasswordData({ newPassword: '', confirmPassword: '' });
       toast({
         title: 'Password Changed',
         description: 'Your password has been updated successfully.',
       });
-    } catch (error) {
+    } catch (error: any) {
       toast({
         title: 'Update Failed',
-        description: 'There was an error changing your password.',
+        description: error.message || 'There was an error changing your password.',
         variant: 'destructive',
       });
+    } finally {
+      setIsPasswordLoading(false);
     }
   };
 
@@ -151,9 +161,10 @@ export const Profile: React.FC = () => {
                 type="email"
                 className="pl-10"
                 value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                disabled
               />
             </div>
+            <p className="text-xs text-muted-foreground">Email cannot be changed</p>
           </div>
 
           <div className="space-y-2">
@@ -174,21 +185,6 @@ export const Profile: React.FC = () => {
                 ))}
               </SelectContent>
             </Select>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="phone">Phone Number (Optional)</Label>
-            <div className="relative">
-              <Phone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                id="phone"
-                type="tel"
-                className="pl-10"
-                value={formData.phone}
-                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                placeholder="+1 555-0123"
-              />
-            </div>
           </div>
 
           <div className="flex justify-end pt-4">
@@ -216,12 +212,14 @@ export const Profile: React.FC = () => {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="rounded-lg bg-muted/50 p-4">
               <p className="text-sm text-muted-foreground">Role</p>
-              <p className="mt-1 font-medium capitalize text-foreground">{user?.role}</p>
+              <p className="mt-1 font-medium capitalize text-foreground">
+                {isAdmin ? 'Admin' : 'User'}
+              </p>
             </div>
             <div className="rounded-lg bg-muted/50 p-4">
               <p className="text-sm text-muted-foreground">Member Since</p>
               <p className="mt-1 font-medium text-foreground">
-                {user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}
+                {user?.created_at ? new Date(user.created_at).toLocaleDateString() : 'N/A'}
               </p>
             </div>
           </div>
@@ -238,18 +236,6 @@ export const Profile: React.FC = () => {
           <CardDescription>Update your account password</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="current-password">Current Password</Label>
-            <Input
-              id="current-password"
-              type="password"
-              value={passwordData.currentPassword}
-              onChange={(e) => setPasswordData({ ...passwordData, currentPassword: e.target.value })}
-            />
-          </div>
-
-          <Separator />
-
           <div className="space-y-2">
             <Label htmlFor="new-password">New Password</Label>
             <Input
@@ -273,9 +259,13 @@ export const Profile: React.FC = () => {
           <div className="flex justify-end pt-4">
             <Button 
               onClick={handleChangePassword}
-              disabled={!passwordData.currentPassword || !passwordData.newPassword || !passwordData.confirmPassword}
+              disabled={!passwordData.newPassword || !passwordData.confirmPassword || isPasswordLoading}
             >
-              Update Password
+              {isPasswordLoading ? (
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
+              ) : (
+                'Update Password'
+              )}
             </Button>
           </div>
         </CardContent>

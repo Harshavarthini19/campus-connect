@@ -18,41 +18,42 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
-import { createIssue, campusLocations, createNotification } from '@/lib/data';
+import { supabase } from '@/integrations/supabase/client';
+import { campusLocations } from '@/lib/data';
 
 const issueTypes = [
   { 
-    value: 'infrastructure', 
-    label: 'Infrastructure', 
-    icon: Building, 
-    description: 'Building issues, broken facilities, maintenance needs',
-    color: 'bg-blue-500/10 text-blue-600 border-blue-500/30'
-  },
-  { 
-    value: 'technical', 
-    label: 'Technical', 
+    value: 'maintenance', 
+    label: 'Maintenance', 
     icon: Wrench, 
-    description: 'WiFi, computers, lab equipment, software issues',
+    description: 'Building issues, broken facilities, maintenance needs',
     color: 'bg-purple-500/10 text-purple-600 border-purple-500/30'
   },
   { 
-    value: 'harassment', 
-    label: 'Harassment', 
+    value: 'safety', 
+    label: 'Safety', 
     icon: AlertTriangle, 
-    description: 'Misconduct, bullying, inappropriate behavior',
+    description: 'Security concerns, hazards, unsafe conditions',
     color: 'bg-red-500/10 text-red-600 border-red-500/30'
   },
   { 
-    value: 'suggestion', 
-    label: 'Suggestion', 
+    value: 'cleanliness', 
+    label: 'Cleanliness', 
+    icon: Building, 
+    description: 'Cleaning issues, sanitation, waste management',
+    color: 'bg-blue-500/10 text-blue-600 border-blue-500/30'
+  },
+  { 
+    value: 'other', 
+    label: 'Other', 
     icon: Lightbulb, 
-    description: 'Improvements, new ideas, feature requests',
+    description: 'Other issues, suggestions, or feedback',
     color: 'bg-amber-500/10 text-amber-600 border-amber-500/30'
   },
 ];
@@ -61,7 +62,7 @@ const priorities = [
   { value: 'low', label: 'Low', description: 'Minor inconvenience, can wait' },
   { value: 'medium', label: 'Medium', description: 'Should be addressed soon' },
   { value: 'high', label: 'High', description: 'Important, needs quick attention' },
-  { value: 'urgent', label: 'Urgent', description: 'Critical, immediate action required' },
+  { value: 'critical', label: 'Critical', description: 'Urgent, immediate action required' },
 ];
 
 const steps = [
@@ -71,18 +72,21 @@ const steps = [
   { id: 4, title: 'Review', icon: Check },
 ];
 
+type IssueType = 'maintenance' | 'safety' | 'cleanliness' | 'noise' | 'accessibility' | 'other';
+type IssuePriority = 'low' | 'medium' | 'high' | 'critical';
+
 export const ReportIssue: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [currentStep, setCurrentStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [formData, setFormData] = useState({
-    type: '' as 'infrastructure' | 'harassment' | 'technical' | 'suggestion' | '',
+    type: '' as IssueType | '',
     title: '',
     description: '',
-    priority: 'medium' as 'low' | 'medium' | 'high' | 'urgent',
+    priority: 'medium' as IssuePriority,
     location: '',
     isAnonymous: false,
     attachments: [] as File[],
@@ -119,29 +123,19 @@ export const ReportIssue: React.FC = () => {
     try {
       const selectedLocation = campusLocations.find(l => l.name === formData.location);
       
-      const newIssue = createIssue({
+      const { error } = await supabase.from('issues').insert({
         title: formData.title,
         description: formData.description,
-        type: formData.type,
+        type: formData.type as IssueType,
         priority: formData.priority,
-        status: 'new',
-        location: {
-          name: formData.location,
-          coordinates: selectedLocation?.coordinates,
-        },
-        reporterId: user.id,
-        reporterName: formData.isAnonymous ? 'Anonymous' : user.name,
-        isAnonymous: formData.isAnonymous,
-        attachments: [],
+        status: 'pending',
+        location: formData.location,
+        latitude: selectedLocation?.coordinates?.lat || null,
+        longitude: selectedLocation?.coordinates?.lng || null,
+        reporter_id: user.id,
       });
 
-      createNotification({
-        userId: user.id,
-        title: 'Issue Submitted',
-        message: `Your issue "${formData.title}" has been submitted successfully.`,
-        type: 'success',
-        link: '/my-reports',
-      });
+      if (error) throw error;
 
       toast({
         title: 'Issue Reported Successfully!',
@@ -226,7 +220,7 @@ export const ReportIssue: React.FC = () => {
                   <button
                     key={type.value}
                     type="button"
-                    onClick={() => setFormData({ ...formData, type: type.value as any })}
+                    onClick={() => setFormData({ ...formData, type: type.value as IssueType })}
                     className={`flex flex-col items-start gap-3 rounded-lg border-2 p-4 text-left transition-all hover:shadow-md ${
                       formData.type === type.value
                         ? 'border-primary bg-primary/5'
@@ -287,7 +281,7 @@ export const ReportIssue: React.FC = () => {
                       <button
                         key={priority.value}
                         type="button"
-                        onClick={() => setFormData({ ...formData, priority: priority.value as any })}
+                        onClick={() => setFormData({ ...formData, priority: priority.value as IssuePriority })}
                         className={`rounded-lg border-2 p-3 text-center transition-all ${
                           formData.priority === priority.value
                             ? 'border-primary bg-primary/5'
@@ -435,21 +429,25 @@ export const ReportIssue: React.FC = () => {
                 <div className="border-t border-border pt-4">
                   <p className="text-sm text-muted-foreground">Submitted By</p>
                   <p className="font-medium text-foreground">
-                    {formData.isAnonymous ? 'Anonymous' : user?.name}
+                    {formData.isAnonymous ? 'Anonymous' : (profile?.name || 'You')}
                   </p>
                 </div>
 
                 {formData.attachments.length > 0 && (
                   <div className="border-t border-border pt-4">
                     <p className="text-sm text-muted-foreground">Attachments</p>
-                    <p className="font-medium text-foreground">{formData.attachments.length} file(s)</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {formData.attachments.map((file, index) => (
+                        <Badge key={index} variant="secondary">{file.name}</Badge>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
             </div>
           )}
 
-          {/* Navigation Buttons */}
+          {/* Navigation */}
           <div className="mt-8 flex justify-between">
             <Button
               variant="outline"
@@ -474,8 +472,8 @@ export const ReportIssue: React.FC = () => {
                   <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
                 ) : (
                   <>
+                    <Check className="mr-2 h-4 w-4" />
                     Submit Report
-                    <Check className="ml-2 h-4 w-4" />
                   </>
                 )}
               </Button>
