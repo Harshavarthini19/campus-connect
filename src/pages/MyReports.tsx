@@ -109,6 +109,57 @@ export const MyReports: React.FC = () => {
     fetchUserAndIssues();
   }, []);
 
+  // Real-time subscription for issue changes
+  useEffect(() => {
+    if (!userId) return;
+
+    const channel = supabase
+      .channel('issues-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'issues',
+        },
+        (payload) => {
+          setIssues((prev) => prev.filter((issue) => issue.id !== payload.old.id));
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'issues',
+          filter: `reporter_id=eq.${userId}`,
+        },
+        (payload) => {
+          setIssues((prev) => [payload.new as Issue, ...prev]);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'issues',
+        },
+        (payload) => {
+          setIssues((prev) =>
+            prev.map((issue) =>
+              issue.id === payload.new.id ? (payload.new as Issue) : issue
+            )
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userId]);
+
   const handleDeleteIssue = async () => {
     if (issueToDelete) {
       const { error } = await supabase
