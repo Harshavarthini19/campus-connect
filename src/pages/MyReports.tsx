@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, 
@@ -37,28 +37,33 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { useAuth } from '@/contexts/AuthContext';
-import { getIssuesByReporter, deleteIssue, Issue } from '@/lib/data';
+import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import type { Tables } from '@/integrations/supabase/types';
+
+type Issue = Tables<'issues'>;
 
 const typeIcons = {
-  infrastructure: Building,
-  harassment: AlertTriangle,
-  technical: Wrench,
-  suggestion: Lightbulb,
+  maintenance: Wrench,
+  safety: AlertTriangle,
+  cleanliness: Building,
+  noise: Lightbulb,
+  accessibility: Building,
+  other: Lightbulb,
 };
 
 const typeColors = {
-  infrastructure: 'bg-blue-500/10 text-blue-600',
-  harassment: 'bg-red-500/10 text-red-600',
-  technical: 'bg-purple-500/10 text-purple-600',
-  suggestion: 'bg-amber-500/10 text-amber-600',
+  maintenance: 'bg-purple-500/10 text-purple-600',
+  safety: 'bg-red-500/10 text-red-600',
+  cleanliness: 'bg-blue-500/10 text-blue-600',
+  noise: 'bg-amber-500/10 text-amber-600',
+  accessibility: 'bg-green-500/10 text-green-600',
+  other: 'bg-gray-500/10 text-gray-600',
 };
 
 const statusColors = {
-  'new': 'bg-info text-info-foreground',
-  'in-progress': 'bg-warning text-warning-foreground',
-  'under-review': 'bg-primary text-primary-foreground',
+  'pending': 'bg-info text-info-foreground',
+  'in_progress': 'bg-warning text-warning-foreground',
   'resolved': 'bg-success text-success-foreground',
   'closed': 'bg-muted text-muted-foreground',
 };
@@ -67,50 +72,73 @@ const priorityColors = {
   low: 'border-l-muted-foreground/30',
   medium: 'border-l-info',
   high: 'border-l-warning',
-  urgent: 'border-l-destructive',
+  critical: 'border-l-destructive',
 };
 
 export const MyReports: React.FC = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [issueToDelete, setIssueToDelete] = useState<Issue | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [issues, setIssues] = useState<Issue[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
 
-  const issues = user ? getIssuesByReporter(user.id) : [];
+  useEffect(() => {
+    const fetchUserAndIssues = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setUserId(user.id);
+        const { data, error } = await supabase
+          .from('issues')
+          .select('*')
+          .eq('reporter_id', user.id)
+          .order('created_at', { ascending: false });
+        
+        if (error) {
+          toast.error('Failed to load reports');
+        } else {
+          setIssues(data || []);
+        }
+      }
+      setLoading(false);
+    };
 
-  const handleDeleteIssue = () => {
+    fetchUserAndIssues();
+  }, []);
+
+  const handleDeleteIssue = async () => {
     if (issueToDelete) {
-      const success = deleteIssue(issueToDelete.id);
-      if (success) {
-        toast.success('Report deleted successfully');
-        setRefreshKey(prev => prev + 1);
-      } else {
+      const { error } = await supabase
+        .from('issues')
+        .delete()
+        .eq('id', issueToDelete.id);
+      
+      if (error) {
         toast.error('Failed to delete report');
+      } else {
+        toast.success('Report deleted successfully');
+        setIssues(issues.filter(i => i.id !== issueToDelete.id));
       }
       setIssueToDelete(null);
     }
   };
 
   const filteredIssues = useMemo(() => {
-    return issues
-      .filter((issue) => {
-        const matchesSearch = 
-          issue.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          issue.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          issue.location.name.toLowerCase().includes(searchQuery.toLowerCase());
-        
-        const matchesStatus = statusFilter === 'all' || issue.status === statusFilter;
-        const matchesType = typeFilter === 'all' || issue.type === typeFilter;
-        
-        return matchesSearch && matchesStatus && matchesType;
-      })
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [issues, searchQuery, statusFilter, typeFilter, refreshKey]);
+    return issues.filter((issue) => {
+      const matchesSearch = 
+        issue.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        issue.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        issue.location.toLowerCase().includes(searchQuery.toLowerCase());
+      
+      const matchesStatus = statusFilter === 'all' || issue.status === statusFilter;
+      const matchesType = typeFilter === 'all' || issue.type === typeFilter;
+      
+      return matchesSearch && matchesStatus && matchesType;
+    });
+  }, [issues, searchQuery, statusFilter, typeFilter]);
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -121,6 +149,14 @@ export const MyReports: React.FC = () => {
       minute: '2-digit',
     });
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <div className="text-muted-foreground">Loading reports...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="animate-fade-in">
@@ -156,9 +192,8 @@ export const MyReports: React.FC = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="new">New</SelectItem>
-                <SelectItem value="in-progress">In Progress</SelectItem>
-                <SelectItem value="under-review">Under Review</SelectItem>
+                <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="in_progress">In Progress</SelectItem>
                 <SelectItem value="resolved">Resolved</SelectItem>
                 <SelectItem value="closed">Closed</SelectItem>
               </SelectContent>
@@ -169,10 +204,12 @@ export const MyReports: React.FC = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
-                <SelectItem value="infrastructure">Infrastructure</SelectItem>
-                <SelectItem value="technical">Technical</SelectItem>
-                <SelectItem value="harassment">Harassment</SelectItem>
-                <SelectItem value="suggestion">Suggestion</SelectItem>
+                <SelectItem value="maintenance">Maintenance</SelectItem>
+                <SelectItem value="safety">Safety</SelectItem>
+                <SelectItem value="cleanliness">Cleanliness</SelectItem>
+                <SelectItem value="noise">Noise</SelectItem>
+                <SelectItem value="accessibility">Accessibility</SelectItem>
+                <SelectItem value="other">Other</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -230,18 +267,12 @@ export const MyReports: React.FC = () => {
                       <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
                         <div className="flex items-center gap-1">
                           <MapPin className="h-4 w-4" />
-                          {issue.location.name}
+                          {issue.location}
                         </div>
                         <div className="flex items-center gap-1">
                           <Clock className="h-4 w-4" />
-                          {formatDate(issue.createdAt)}
+                          {formatDate(issue.created_at)}
                         </div>
-                        {issue.comments.length > 0 && (
-                          <div className="flex items-center gap-1">
-                            <MessageSquare className="h-4 w-4" />
-                            {issue.comments.length} comment{issue.comments.length !== 1 ? 's' : ''}
-                          </div>
-                        )}
                         <Badge variant="outline" className="capitalize">{issue.priority}</Badge>
                       </div>
                     </div>
@@ -287,7 +318,7 @@ export const MyReports: React.FC = () => {
                   <div>
                     <DialogTitle>{selectedIssue.title}</DialogTitle>
                     <DialogDescription>
-                      Submitted on {formatDate(selectedIssue.createdAt)}
+                      Submitted on {formatDate(selectedIssue.created_at)}
                     </DialogDescription>
                   </div>
                 </div>
@@ -296,7 +327,7 @@ export const MyReports: React.FC = () => {
               <div className="space-y-4">
                 <div className="flex flex-wrap gap-2">
                   <Badge className={statusColors[selectedIssue.status]}>
-                    {selectedIssue.status.replace('-', ' ')}
+                    {selectedIssue.status.replace('_', ' ')}
                   </Badge>
                   <Badge variant="outline" className="capitalize">{selectedIssue.priority} priority</Badge>
                   <Badge variant="outline" className="capitalize">{selectedIssue.type}</Badge>
@@ -313,33 +344,17 @@ export const MyReports: React.FC = () => {
                       <MapPin className="h-4 w-4" />
                       <span className="text-sm">Location</span>
                     </div>
-                    <p className="mt-1 font-medium text-foreground">{selectedIssue.location.name}</p>
+                    <p className="mt-1 font-medium text-foreground">{selectedIssue.location}</p>
                   </div>
                   <div className="rounded-lg border border-border p-4">
                     <div className="flex items-center gap-2 text-muted-foreground">
                       <Clock className="h-4 w-4" />
                       <span className="text-sm">Last Updated</span>
                     </div>
-                    <p className="mt-1 font-medium text-foreground">{formatDate(selectedIssue.updatedAt)}</p>
+                    <p className="mt-1 font-medium text-foreground">{formatDate(selectedIssue.updated_at)}</p>
                   </div>
                 </div>
 
-                {selectedIssue.comments.length > 0 && (
-                  <div>
-                    <h4 className="mb-3 font-medium text-foreground">Comments</h4>
-                    <div className="space-y-3">
-                      {selectedIssue.comments.filter(c => !c.isInternal).map((comment) => (
-                        <div key={comment.id} className="rounded-lg border border-border p-4">
-                          <div className="flex items-center justify-between">
-                            <span className="font-medium text-foreground">{comment.userName}</span>
-                            <span className="text-xs text-muted-foreground">{formatDate(comment.createdAt)}</span>
-                          </div>
-                          <p className="mt-2 text-muted-foreground">{comment.content}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
             </>
           )}
