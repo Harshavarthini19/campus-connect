@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { 
   AlertTriangle, 
@@ -17,38 +17,99 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/contexts/AuthContext';
-import { getStatistics, getIssuesByReporter, getIssues } from '@/lib/data';
+import { supabase } from '@/integrations/supabase/client';
+import type { Tables } from '@/integrations/supabase/types';
 
-const typeIcons = {
-  infrastructure: Building,
-  harassment: AlertTriangle,
-  technical: Wrench,
-  suggestion: Lightbulb,
+type Issue = Tables<'issues'>;
+
+const typeIcons: Record<string, React.ElementType> = {
+  maintenance: Wrench,
+  safety: AlertTriangle,
+  cleanliness: Building,
+  noise: Lightbulb,
+  accessibility: Building,
+  other: Lightbulb,
 };
 
-const statusColors = {
-  'new': 'bg-info text-info-foreground',
-  'in-progress': 'bg-warning text-warning-foreground',
-  'under-review': 'bg-primary text-primary-foreground',
+const statusColors: Record<string, string> = {
+  'pending': 'bg-info text-info-foreground',
+  'in_progress': 'bg-warning text-warning-foreground',
   'resolved': 'bg-success text-success-foreground',
   'closed': 'bg-muted text-muted-foreground',
 };
 
-const priorityColors = {
+const priorityColors: Record<string, string> = {
   low: 'border-muted-foreground/30',
   medium: 'border-info',
   high: 'border-warning',
-  urgent: 'border-destructive',
+  critical: 'border-destructive',
 };
 
+interface Stats {
+  total: number;
+  pending: number;
+  inProgress: number;
+  resolved: number;
+  byType: Record<string, number>;
+  byPriority: Record<string, number>;
+}
+
 export const Dashboard: React.FC = () => {
-  const { user } = useAuth();
-  const stats = getStatistics(user?.id);
-  const userIssues = user ? getIssuesByReporter(user.id) : [];
-  const allIssues = getIssues();
-  const recentIssues = (user?.role === 'admin' ? allIssues : userIssues)
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-    .slice(0, 5);
+  const { user, profile, isAdmin } = useAuth();
+  const [issues, setIssues] = useState<Issue[]>([]);
+  const [stats, setStats] = useState<Stats>({
+    total: 0,
+    pending: 0,
+    inProgress: 0,
+    resolved: 0,
+    byType: {},
+    byPriority: { low: 0, medium: 0, high: 0, critical: 0 },
+  });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const fetchIssues = async () => {
+      let query = supabase.from('issues').select('*');
+      
+      if (!isAdmin) {
+        query = query.eq('reporter_id', user.id);
+      }
+      
+      const { data, error } = await query.order('updated_at', { ascending: false });
+      
+      if (!error && data) {
+        setIssues(data);
+        
+        // Calculate stats
+        const newStats: Stats = {
+          total: data.length,
+          pending: data.filter(i => i.status === 'pending').length,
+          inProgress: data.filter(i => i.status === 'in_progress').length,
+          resolved: data.filter(i => i.status === 'resolved').length,
+          byType: {},
+          byPriority: {
+            low: data.filter(i => i.priority === 'low').length,
+            medium: data.filter(i => i.priority === 'medium').length,
+            high: data.filter(i => i.priority === 'high').length,
+            critical: data.filter(i => i.priority === 'critical').length,
+          },
+        };
+        
+        data.forEach(issue => {
+          newStats.byType[issue.type] = (newStats.byType[issue.type] || 0) + 1;
+        });
+        
+        setStats(newStats);
+      }
+      setLoading(false);
+    };
+
+    fetchIssues();
+  }, [user, isAdmin]);
+
+  const recentIssues = issues.slice(0, 5);
 
   const statCards = [
     {
@@ -60,7 +121,7 @@ export const Dashboard: React.FC = () => {
     },
     {
       title: 'Pending',
-      value: stats.new + stats.inProgress,
+      value: stats.pending + stats.inProgress,
       icon: Clock,
       color: 'text-warning',
       bgColor: 'bg-warning/10',
@@ -73,8 +134,8 @@ export const Dashboard: React.FC = () => {
       bgColor: 'bg-success/10',
     },
     {
-      title: 'Urgent',
-      value: stats.byPriority.urgent,
+      title: 'Critical',
+      value: stats.byPriority.critical || 0,
       icon: AlertTriangle,
       color: 'text-destructive',
       bgColor: 'bg-destructive/10',
@@ -94,13 +155,21 @@ export const Dashboard: React.FC = () => {
     return date.toLocaleDateString();
   };
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <div className="text-muted-foreground">Loading dashboard...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8 animate-fade-in">
       {/* Welcome Section */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h1 className="text-3xl font-bold text-foreground">
-            Welcome back, {user?.name?.split(' ')[0]}!
+            Welcome back, {profile?.name?.split(' ')[0] || 'User'}!
           </h1>
           <p className="mt-1 text-muted-foreground">
             Here's what's happening with your campus reports
@@ -205,11 +274,11 @@ export const Dashboard: React.FC = () => {
             ) : (
               <div className="space-y-4">
                 {recentIssues.map((issue) => {
-                  const TypeIcon = typeIcons[issue.type];
+                  const TypeIcon = typeIcons[issue.type] || Lightbulb;
                   return (
                     <div
                       key={issue.id}
-                      className={`flex items-start gap-4 rounded-lg border-l-4 bg-muted/30 p-4 ${priorityColors[issue.priority]}`}
+                      className={`flex items-start gap-4 rounded-lg border-l-4 bg-muted/30 p-4 ${priorityColors[issue.priority] || ''}`}
                     >
                       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-background">
                         <TypeIcon className="h-5 w-5 text-muted-foreground" />
@@ -217,15 +286,15 @@ export const Dashboard: React.FC = () => {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-2">
                           <p className="font-medium text-foreground line-clamp-1">{issue.title}</p>
-                          <Badge className={`shrink-0 ${statusColors[issue.status]}`}>
-                            {issue.status.replace('-', ' ')}
+                          <Badge className={`shrink-0 ${statusColors[issue.status] || ''}`}>
+                            {issue.status.replace('_', ' ')}
                           </Badge>
                         </div>
                         <p className="mt-1 text-sm text-muted-foreground line-clamp-1">
-                          {issue.location.name}
+                          {issue.location}
                         </p>
                         <p className="mt-2 text-xs text-muted-foreground">
-                          Updated {formatDate(issue.updatedAt)}
+                          Updated {formatDate(issue.updated_at)}
                         </p>
                       </div>
                     </div>
@@ -246,10 +315,10 @@ export const Dashboard: React.FC = () => {
         <CardContent>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {[
-              { type: 'infrastructure', label: 'Infrastructure', icon: Building, count: stats.byType.infrastructure },
-              { type: 'technical', label: 'Technical', icon: Wrench, count: stats.byType.technical },
-              { type: 'harassment', label: 'Harassment', icon: AlertTriangle, count: stats.byType.harassment },
-              { type: 'suggestion', label: 'Suggestions', icon: Lightbulb, count: stats.byType.suggestion },
+              { type: 'maintenance', label: 'Maintenance', icon: Wrench },
+              { type: 'safety', label: 'Safety', icon: AlertTriangle },
+              { type: 'cleanliness', label: 'Cleanliness', icon: Building },
+              { type: 'other', label: 'Other', icon: Lightbulb },
             ].map((item) => (
               <div
                 key={item.type}
@@ -259,7 +328,7 @@ export const Dashboard: React.FC = () => {
                   <item.icon className="h-5 w-5 text-primary" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-foreground">{item.count}</p>
+                  <p className="text-2xl font-bold text-foreground">{stats.byType[item.type] || 0}</p>
                   <p className="text-sm text-muted-foreground">{item.label}</p>
                 </div>
               </div>

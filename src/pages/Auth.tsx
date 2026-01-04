@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Shield, Mail, Lock, User, Building, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { z } from 'zod';
 
 const departments = [
   'Computer Science',
@@ -22,25 +23,57 @@ const departments = [
   'Other',
 ];
 
+const emailSchema = z.string().email('Please enter a valid email address');
+const passwordSchema = z.string().min(6, 'Password must be at least 6 characters');
+
 export const Auth: React.FC = () => {
   const [searchParams] = useSearchParams();
   const [isSignup, setIsSignup] = useState(searchParams.get('mode') === 'signup');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { login, signup } = useAuth();
+  const { login, signup, user, isLoading: authLoading } = useAuth();
 
   const [formData, setFormData] = useState({
     email: '',
     password: '',
     name: '',
     department: '',
-    role: 'student' as 'student' | 'staff',
   });
+
+  // Redirect if already logged in
+  useEffect(() => {
+    if (!authLoading && user) {
+      navigate('/dashboard');
+    }
+  }, [user, authLoading, navigate]);
+
+  const validateForm = () => {
+    const newErrors: { email?: string; password?: string } = {};
+    
+    const emailResult = emailSchema.safeParse(formData.email);
+    if (!emailResult.success) {
+      newErrors.email = emailResult.error.errors[0].message;
+    }
+    
+    const passwordResult = passwordSchema.safeParse(formData.password);
+    if (!passwordResult.success) {
+      newErrors.password = passwordResult.error.errors[0].message;
+    }
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!validateForm()) {
+      return;
+    }
+    
     setIsLoading(true);
 
     try {
@@ -55,7 +88,13 @@ export const Auth: React.FC = () => {
           return;
         }
 
-        const result = await signup(formData);
+        const result = await signup({
+          email: formData.email,
+          password: formData.password,
+          name: formData.name,
+          department: formData.department,
+        });
+        
         if (result.success) {
           toast({
             title: 'Account Created!',
@@ -89,6 +128,14 @@ export const Auth: React.FC = () => {
       setIsLoading(false);
     }
   };
+
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center gradient-hero p-4">
@@ -153,28 +200,6 @@ export const Auth: React.FC = () => {
                     </SelectContent>
                   </Select>
                 </div>
-
-                <div className="space-y-2">
-                  <Label>Role</Label>
-                  <div className="flex gap-4">
-                    <Button
-                      type="button"
-                      variant={formData.role === 'student' ? 'default' : 'outline'}
-                      className="flex-1"
-                      onClick={() => setFormData({ ...formData, role: 'student' })}
-                    >
-                      Student
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={formData.role === 'staff' ? 'default' : 'outline'}
-                      className="flex-1"
-                      onClick={() => setFormData({ ...formData, role: 'staff' })}
-                    >
-                      Staff
-                    </Button>
-                  </div>
-                </div>
               </>
             )}
 
@@ -186,12 +211,18 @@ export const Auth: React.FC = () => {
                   id="email"
                   type="email"
                   placeholder="you@university.edu"
-                  className="pl-10"
+                  className={`pl-10 ${errors.email ? 'border-destructive' : ''}`}
                   value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  onChange={(e) => {
+                    setFormData({ ...formData, email: e.target.value });
+                    if (errors.email) setErrors({ ...errors, email: undefined });
+                  }}
                   required
                 />
               </div>
+              {errors.email && (
+                <p className="text-sm text-destructive">{errors.email}</p>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -202,9 +233,12 @@ export const Auth: React.FC = () => {
                   id="password"
                   type={showPassword ? 'text' : 'password'}
                   placeholder="••••••••"
-                  className="pl-10 pr-10"
+                  className={`pl-10 pr-10 ${errors.password ? 'border-destructive' : ''}`}
                   value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  onChange={(e) => {
+                    setFormData({ ...formData, password: e.target.value });
+                    if (errors.password) setErrors({ ...errors, password: undefined });
+                  }}
                   required
                 />
                 <button
@@ -215,15 +249,10 @@ export const Auth: React.FC = () => {
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
+              {errors.password && (
+                <p className="text-sm text-destructive">{errors.password}</p>
+              )}
             </div>
-
-            {!isSignup && (
-              <div className="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
-                <p className="font-medium text-foreground">Demo Accounts:</p>
-                <p>Student: john.student@university.edu / password123</p>
-                <p>Admin: admin@university.edu / admin123</p>
-              </div>
-            )}
 
             <Button type="submit" className="w-full" size="lg" disabled={isLoading}>
               {isLoading ? (
